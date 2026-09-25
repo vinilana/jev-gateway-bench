@@ -1,0 +1,43 @@
+{"total":42}
+{"name":"has no third-party dependencies","ok":true}
+{"name":"perft 1: start position","ok":true}
+{"name":"perft 2: start position","ok":true}
+{"name":"perft 3: start position","ok":true}
+{"name":"perft 4: start position","ok":true}
+{"name":"perft 1: kiwipete (castling, pins, en passant)","ok":true}
+{"name":"perft 2: kiwipete (castling, pins, en passant)","ok":true}
+{"name":"perft 3: kiwipete (castling, pins, en passant)","ok":true}
+{"name":"perft 1: endgame (en passant discovered check)","ok":true}
+{"name":"perft 2: endgame (en passant discovered check)","ok":true}
+{"name":"perft 3: endgame (en passant discovered check)","ok":true}
+{"name":"perft 4: endgame (en passant discovered check)","ok":true}
+{"name":"perft 1: promotions and castling rights","ok":true}
+{"name":"perft 2: promotions and castling rights","ok":true}
+{"name":"perft 3: promotions and castling rights","ok":true}
+{"name":"perft 1: promotion with check","ok":true}
+{"name":"perft 2: promotion with check","ok":true}
+{"name":"perft 3: promotion with check","ok":true}
+{"name":"perft 1: middlegame","ok":true}
+{"name":"perft 2: middlegame","ok":true}
+{"name":"perft 3: middlegame","ok":true}
+{"name":"starts from the standard position by default","ok":true}
+{"name":"round-trips FEN","ok":true}
+{"name":"rejects invalid FEN","ok":true}
+{"name":"moves() returns UCI strings","ok":true}
+{"name":"refuses illegal moves without changing the position","ok":true}
+{"name":"updates every FEN field as the game goes on","ok":true}
+{"name":"captures en passant","ok":true}
+{"name":"castles and updates rights","ok":true}
+{"name":"loses a castling right when its rook is captured","ok":true}
+{"name":"promotes to the chosen piece","ok":true}
+{"name":"detects check, checkmate and game over","ok":true}
+{"name":"detects stalemate as a draw","ok":true}
+{"name":"detects insufficient material","ok":true}
+{"name":"applies the fifty-move rule","ok":true}
+{"name":"detects threefold repetition","ok":true}
+{"name":"san: plays a whole game from SAN","ok":true}
+{"name":"san: history() reports the moves played, in SAN","ok":true}
+{"name":"san: disambiguates by file, then rank, then both","ok":true}
+{"name":"san: leaves pinned pieces out of disambiguation","ok":true}
+{"name":"san: writes promotions, en passant and castling","ok":true}
+{"name":"san: refuses what it cannot play","ok":true}

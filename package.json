@@ -13,9 +13,10 @@
     "bench": "node run.mjs",
     "report": "node report.mjs",
     "selftest": "node selftest.mjs",
-    "chart": "node chart.mjs"
+    "chart": "node chart.mjs",
+    "test": "node --test test/opencode-runner.test.mjs"
   },
   "dependencies": {
-    "jev-gateway": "^0.3.1"
+    "jev-gateway": "^0.4.3"
   }
 }

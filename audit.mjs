@@ -12,13 +12,15 @@ const HARMLESS = /^\/(usr|bin|etc|dev|proc|lib|opt|nix|snap)\b|\/\.nvm\/|\/node_
 const PATHS = /(?<![\w.:-])(~?\/(?:home|tmp|mnt|root|var|Users)\/[^\s"'`\\)<>|;,]*)/g;
 
 function inspect(commands, sandbox) {
+  // macOS resolves /var to /private/var in some processes; they name the same sandbox.
+  const canonical = (path) => path.replace(/^\/private(?=\/var\/)/, "");
   const seen = new Map();
   for (const { tool, text } of commands) {
     // Codex looks for AGENTS.md instruction files around its workspace, sometimes far and wide.
     // That is a search for instructions by file name, not for anything about the task.
     if (/AGENTS\.md/.test(text) && !/\b(cat|sed|diff)\b[^|;&]*\/(?!.*AGENTS\.md)/.test(text)) continue;
     for (const [path] of text.matchAll(PATHS)) {
-      if (path.startsWith(sandbox) || HARMLESS.test(path) || seen.has(path)) continue;
+      if (canonical(path).startsWith(canonical(sandbox)) || HARMLESS.test(path) || seen.has(path)) continue;
       const escaped = path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
       const created = tool === "Write" || new RegExp(`(>|tee\\s+(-a\\s+)?|mkdir\\s+(-p\\s+)?|touch\\s+)\\s*${escaped}`).test(text);
       seen.set(path, created ? "created" : "found");
@@ -53,9 +55,25 @@ function claudeCommands(agentLog) {
   return commands;
 }
 
+/** OpenCode's JSON event stream includes the tool and its input for each completed tool call. */
+function opencodeCommands(agentLog) {
+  const commands = [];
+  for (const line of readFileSync(agentLog, "utf8").split("\n")) {
+    try {
+      const entry = JSON.parse(line);
+      if (entry.type === "tool_use" && entry.part?.state?.status === "completed") {
+        commands.push({ tool: entry.part.tool, text: JSON.stringify(entry.part.state.input) });
+      }
+    } catch {
+      // Not a JSON event.
+    }
+  }
+  return commands;
+}
+
 export function audit({ agent, agentLog, sandbox }) {
   if (!existsSync(agentLog)) return { audited: false };
-  const commands = agent === "codex" ? codexCommands(agentLog) : agent === "claude" ? claudeCommands(agentLog) : [];
+  const commands = agent === "codex" ? codexCommands(agentLog) : agent === "claude" ? claudeCommands(agentLog) : agent === "opencode" ? opencodeCommands(agentLog) : [];
   return { audited: true, toolCalls: commands.length, ...inspect(commands, sandbox) };
 }
 

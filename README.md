@@ -3,9 +3,9 @@
 Does routing tool choices through Jev make a coding agent cheaper without making it worse?
 
 This is the benchmark for [jev-gateway](https://github.com/vinilana/jev-gateway). It gives a real
-coding agent (Codex or Claude Code) the same task twice, once with Jev routing on and once with it
-off, meters every token through the gateway, and scores the result with a verifier the agent never
-sees.
+coding agent (Codex, Claude Code or OpenCode) the same task twice, once with Jev routing on and once
+with it off, meters every token through the gateway, and scores the result with a verifier the agent
+never sees.
 
 ## Results
 
@@ -44,7 +44,33 @@ without routing.
 | Opus 5 | 5/5 · 5/5 | 20,152 (+22%) | 676k (+61%) | 25 (+47%) | 390 (+83%) | 44% |
 | Sonnet 5 | 5/5 · 5/5 | 23,487 (+9%) | 991k (+16%) | 32 (+3%) | 327 (+37%) | 42% |
 
-What this says, and what it does not:
+### Opus 5 across harnesses
+
+A separate series ran OpenCode 1.18.32 with `cli_proxy/claude-opus-5` against the same two tasks,
+five runs per mode. The LLM went through a local CLI Proxy API; Jev used OpenRouter
+(`typesafe/jev-1.13`). The gateway was `jev-gateway` 0.4.3. All 20 runs passed every hidden check
+and the tool-call audit found no foreign reads. See the [raw runs and per-run checks](results/2026-09-23-opencode-opus-5-cliproxy-comparison/)
+    and the [on/off summary](results/2026-09-23-opencode-opus-5-cliproxy-comparison/summary.md).
+
+| Task / harness | Output tokens on / off | Input tokens on / off | Requests on / off | Seconds on / off | Solved on / off |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Bugfix / Claude Code | 16,693 / 17,876 | 405,881 / 523,359 | 18 / 21 | 218 / 214 | 5/5 / 5/5 |
+| Bugfix / OpenCode | 9,010 / 23,807 | 542,756 / 800,493 | 13 / 18 | 130 / 623 | 5/5 / 5/5 |
+| SAN / Claude Code | 20,152 / 16,529 | 676,113 / 419,985 | 25 / 17 | 390 / 213 | 5/5 / 5/5 |
+| SAN / OpenCode | 19,972 / 28,235 | 1,242,986 / 1,302,382 | 25 / 26 | 291 / 422 | 5/5 / 5/5 |
+
+These are medians, not matched pairs of runs across harnesses. On SAN, routing increased Claude
+Code's output tokens by 22% and time by 83%, but reduced OpenCode's by 29% and 31%. Without
+routing, OpenCode took 422 seconds against Claude Code's 213. This is evidence that the effect
+depends on the harness and transport, not that one harness caused the old result: Claude Code
+used hints on Anthropic Messages and a claude.ai subscription, while OpenCode used forced tools
+on Chat Completions through a local proxy. The gateway version, Jev provider/model, tool roster,
+model transport and run date also differed. In OpenCode's bugfix baseline one LLM request failed;
+all five runs still passed. Five repetitions per cell remain a small sample. Earlier OpenCode
+pilots using OpenCode Zen (model disabled) and OpenRouter (credit failures, and one contaminated
+run) are excluded from this series.
+
+What the original six-model series says, and what it does not:
 
 - **Debugging is where routing pays.** On `chess-bugfix` every model used fewer tokens with
   routing, from a little (Opus 5, Luna) to a lot (GPT-6 Astra and GPT-5.6 Sol cut output tokens by
@@ -80,9 +106,10 @@ finished results with `node audit.mjs <results dir>`.
 
 ## Run it yourself
 
-You need Node.js 22.15 or newer, a [TypeSafe API key](https://docs.typesafe.ai/introduction) in
-`~/.jev-gateway/.env` (see the [gateway's quick start](https://github.com/vinilana/jev-gateway#quick-start)),
-and Codex and/or Claude Code installed and logged in.
+You need Node.js 22.15 or newer, a Jev key for your chosen provider (TypeSafe, OpenRouter or
+Vercel AI Gateway) in `~/.jev-gateway/.env` (see the
+[gateway's quick start](https://github.com/vinilana/jev-gateway#quick-start)), and Codex, Claude
+Code and/or OpenCode installed and logged in.
 
 ```bash
 git clone https://github.com/vinilana/jev-gateway-bench.git
@@ -94,12 +121,40 @@ npm run bench -- --list                              # tasks and options
 npm run bench -- --agent codex --tasks chess-bugfix  # one run with routing on, one with it off
 npm run bench -- --agent codex --reps 5 --prices 1.25,0.125,10
 npm run bench -- --agent claude --model claude-fable-5-1 --reps 5
+BENCH_OPENCODE_UPSTREAM=http://127.0.0.1:8317/v1 npm run bench -- --agent opencode --model cli_proxy/claude-opus-5 --tasks chess-bugfix,chess-san --reps 5
 ```
 
-Agents run clean by default: no MCP servers, plugins, skills or personal settings. Add
-`--user-tools` to measure your own setup instead. It changes the picture a lot: one setup here sent
-285 tools and about 200,000 tokens with every Claude Code request, against 6 tools and 7,000 tokens
-clean.
+Codex and Claude Code run clean by default: no MCP servers, plugins, skills or personal settings.
+Add `--user-tools` to measure your own setup instead. It changes the picture a lot: one setup here
+sent 285 tools and about 200,000 tokens with every Claude Code request, against 6 tools and 7,000
+tokens clean. OpenCode v2 runs with `--standalone --auto` in the task workspace. It uses a private
+server and disables external plugins, as `--pure` did in v1, while retaining built-in OpenCode
+plugins needed for its agent and tools. It still loads configured providers and other personal
+settings; its runs are not equivalent to the clean-agent condition of the original six-model series.
+
+OpenCode v2 requires `--model provider/model` (or `provider/model#variant` for an explicit effort
+variant). Its selected provider must exist in your OpenCode config with a working credential. Set
+`BENCH_OPENCODE_UPSTREAM` to that provider's real API base
+URL (the default is OpenCode Zen). The runner moves only the selected provider's `baseURL` to its
+isolated gateway for that process and passes the variant on the CLI, not in the root model setting.
+It does not write your OpenCode config. Use a dedicated credential if you want to compare the same
+provider account across machines; the published
+OpenCode series used a locally configured CLI Proxy API.
+
+For OpenCode v2, the runner sets `PWD` to the task workspace as well as starting the process there.
+The CLI uses `PWD` to choose its project; `cwd` alone is not enough. Before each paid session, a
+no-network preflight creates a session with the installed CLI and checks its exported location. A
+missing session or a location outside the workspace stops the series before the gateway or agent
+starts. Check this without running an eval:
+
+```bash
+node run.mjs --agent opencode --model opencode/glm-5.3-flash#high --tasks chess-bugfix --modes off --preflight-only
+```
+
+The isolation test passed with the installed CLI, and the runner's five OpenCode tests passed. This
+only validates session location and the fail-stop guard; it is not a `high` or `max` eval. The earlier
+GLM 5.3 Flash `high` and interrupted `max` runs used the wrong project and are excluded from any
+comparison. They have not been rerun after this correction.
 
 **Real agents spend real quota.** Every run is a full agent session. Start with one task and
 `--reps 1`, look at the numbers, and scale up from there.
@@ -112,7 +167,7 @@ clean.
    routing on or off. Gateways you use every day are not touched, and nothing another session does
    can leak into the numbers.
 3. The agent is started unattended inside the workspace, pointed at that gateway exactly the way
-   `jev-codex` and `jev-claude` do it, with edits and test runs allowed. It gets the task prompt
+   the launchers do it, with edits and test runs allowed. It gets the task prompt
    and a time limit.
 4. The gateway's own metering gives the totals for the run: LLM requests, input tokens (and how
    many were cached), output tokens (and how many were reasoning), Jev calls and tokens, and how

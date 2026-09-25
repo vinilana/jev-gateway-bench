@@ -14,6 +14,7 @@ import { fileURLToPath } from "node:url";
 import { parseArgs } from "node:util";
 import { claude, codex } from "jev-gateway/bin/clients.mjs";
 import { GATEWAY_ARGS, ROOT, loadEnv } from "jev-gateway/bin/launcher.mjs";
+import { PROVIDERS, resolveProvider } from "jev-gateway/dist/jev.js";
 import { audit } from "./audit.mjs";
 import { summarize } from "./report.mjs";
 import { tasks as chessTasks } from "./tasks/chess/tasks.mjs";
@@ -27,6 +28,24 @@ const TASKS = [...chessTasks];
 // change the tool roster (one setup here sent 285 tools and 200k tokens per request), and the
 // results would describe that setup instead of the agent. --user-tools keeps it all.
 const AGENTS = {
+  opencode: {
+    spec: { upstream: () => process.env.BENCH_OPENCODE_UPSTREAM ?? "https://opencode.ai/zen/v1" },
+    command: (origin, workspace, prompt) => ({
+      file: "opencode",
+      args: ["run", "--standalone", "--auto", "--format", "json", "--model", options.model, prompt],
+      env: {
+        OPENCODE_CONFIG_CONTENT: JSON.stringify({
+          model: options.model.split("#")[0],
+          plugins: ["-*", "opencode.agent", "opencode.models.dev", "opencode.config.provider", "opencode.provider.opencode", "opencode.tool.patch", "opencode.tool.edit", "opencode.tool.glob", "opencode.tool.grep", "opencode.tool.read", "opencode.tool.shell", "opencode.tool.write"],
+          providers: {
+            [options.model.split("/")[0]]: { settings: { baseURL: `${origin}/v1` } },
+          },
+        }),
+        OPENCODE_EXPERIMENTAL_NATIVE_LLM: "false",
+        OPENCODE_EXPERIMENTAL_CODE_MODE: "false",
+      },
+    }),
+  },
   codex: {
     spec: codex,
     command: (origin, workspace, prompt) => ({
@@ -73,6 +92,7 @@ const { values: options } = parseArgs({
     "timeout-min": { type: "string" },
     prices: { type: "string" },
     keep: { type: "boolean", default: false },
+    "preflight-only": { type: "boolean", default: false },
     list: { type: "boolean", default: false },
     help: { type: "boolean", default: false },
   },
@@ -81,8 +101,8 @@ const { values: options } = parseArgs({
 if (options.help || options.list) {
   console.log(`Usage: node run.mjs [options]
 
-  --agent codex|claude|fake   which agent does the work (default codex)
-  --model NAME                model for the agent (default: whatever the agent is configured with)
+  --agent codex|claude|opencode|fake   which agent does the work (default codex)
+  --model NAME                model for the agent (required for opencode)
   --user-tools                keep your own MCP servers, plugins, skills and settings (default: run the agent clean)
   --tasks a,b                 task ids (default: all)
   --modes on,off              routing states to compare (default on,off)
@@ -92,6 +112,7 @@ if (options.help || options.list) {
   --port N                    port for the per-run gateway (default 8890)
   --out DIR                   where results go (default results/<timestamp>)
   --keep                      keep the workspaces for inspection
+  --preflight-only            check OpenCode's session location without a paid request
 
 Tasks:
 ${TASKS.map((task) => `  ${task.id.padEnd(14)} ${task.title} (${task.timeoutMinutes} min)`).join("\n")}
@@ -102,6 +123,7 @@ Real agents spend real quota: every run is a full agent session. Start with one 
 
 const agent = AGENTS[options.agent];
 if (!agent) throw new Error(`Unknown agent "${options.agent}". Use one of: ${Object.keys(AGENTS).join(", ")}`);
+if (options.agent === "opencode" && !options.model?.includes("/")) throw new Error("--agent opencode needs --model provider/model");
 const chosen = options.tasks.split(",").map((id) => {
   const task = TASKS.find((candidate) => candidate.id === id.trim());
   if (!task) throw new Error(`Unknown task "${id}". Run with --list to see them.`);
@@ -115,8 +137,9 @@ const origin = `http://127.0.0.1:${port}`;
 const outDir = resolve(options.out ?? join(HERE, "results", new Date().toISOString().replace(/[:.]/g, "-")));
 
 loadEnv();
-if (!process.env.TYPESAFE_API_KEY && modes.includes("on")) {
-  throw new Error("TYPESAFE_API_KEY is not set, so routing could never be on. Set it, or run with --modes off.");
+const jevKey = PROVIDERS[resolveProvider(process.env)].keyEnv;
+if (!process.env[jevKey] && modes.includes("on")) {
+  throw new Error(`${jevKey} is not set, so routing could never be on. Set it, or run with --modes off.`);
 }
 
 const sleep = (ms) => new Promise((done) => setTimeout(done, ms));
@@ -154,6 +177,32 @@ function run(file, args, { cwd, env, logFile, timeoutMs, onLine }) {
     child.on("error", () => finish(127));
     child.on("exit", (code) => finish(code));
   });
+}
+
+async function checkOpenCodeLocation(workspace, scratch) {
+  const db = join(scratch, "opencode-preflight.db");
+  const config = JSON.stringify({
+    model: options.model.split("#")[0],
+    plugins: ["-*", "opencode.agent", "opencode.models.dev", "opencode.config.provider", "opencode.provider.opencode", "opencode.tool.patch", "opencode.tool.edit", "opencode.tool.glob", "opencode.tool.grep", "opencode.tool.read", "opencode.tool.shell", "opencode.tool.write"],
+    providers: { [options.model.split("/")[0]]: { settings: { baseURL: "http://127.0.0.1:1/v1" } } },
+  });
+  const env = { PWD: workspace, TMPDIR: scratch, OPENCODE_DB: db, OPENCODE_API_KEY: "preflight-no-network", OPENCODE_CONFIG_CONTENT: config };
+  let sessionID;
+  await run("opencode", ["run", "--standalone", "--auto", "--format", "json", "--model", options.model, "Say OK."], {
+    cwd: workspace, env, timeoutMs: 9_000,
+    onLine: (line) => { try { sessionID ??= JSON.parse(line).sessionID; } catch {} },
+  });
+  if (!sessionID) throw new Error("OpenCode isolation preflight failed: no session was created; stopping series");
+  let exported = "";
+  const outcome = await run("opencode", ["session", "export", "--standalone", sessionID], {
+    cwd: workspace, env, timeoutMs: 9_000, onLine: (line) => { exported += line + "\n"; },
+  });
+  const directory = outcome.exitCode === 0 ? JSON.parse(exported).info?.location?.directory : undefined;
+  const canonical = (path) => path?.replace(/^\/private(?=\/var\/)/, "");
+  if (!directory || canonical(directory) !== canonical(workspace)) {
+    throw new Error(`OpenCode isolation preflight failed: session directory ${JSON.stringify(directory)} is not ${workspace}; stopping series`);
+  }
+  console.log(`OpenCode session location confirmed: ${directory}`);
 }
 
 async function startGateway(mode, logFile) {
@@ -287,13 +336,20 @@ for (const [number, { task, mode, rep }] of plan.entries()) {
   await run("git", ["add", "-A"], { cwd: workspace, timeoutMs: 30_000 });
   await run("git", ["-c", "user.name=bench", "-c", "user.email=bench@localhost", "commit", "-q", "-m", "task"], { cwd: workspace, timeoutMs: 30_000 });
 
+  if (options.agent === "opencode") await checkOpenCodeLocation(workspace, scratch);
+  if (options["preflight-only"]) {
+    if (!options.keep) rmSync(sandbox, { recursive: true, force: true });
+    sandbox = undefined;
+    break;
+  }
+
   process.stdout.write(`[${number + 1}/${plan.length}] ${label} … `);
   const gateway = await startGateway(mode, join(runDir, "gateway.log"));
   let result;
   try {
     const { file, args, env } = agent.command(origin, workspace, task.prompt, task);
     const timeoutMs = Number(options["timeout-min"] ?? task.timeoutMinutes) * 60_000;
-    const outcome = await run(file, args, { cwd: workspace, env: { ...env, TMPDIR: scratch }, logFile: join(runDir, "agent.log"), timeoutMs });
+    const outcome = await run(file, args, { cwd: workspace, env: { ...env, ...(options.agent === "opencode" ? { PWD: workspace } : {}), TMPDIR: scratch }, logFile: join(runDir, "agent.log"), timeoutMs });
     const usage = await meter();
     result = { ...outcome, ...usage };
   } finally {
@@ -304,6 +360,16 @@ for (const [number, { task, mode, rep }] of plan.entries()) {
   await run("git", ["diff", "--cached", "--stat"], { cwd: workspace, logFile: join(runDir, "diff.stat"), timeoutMs: 30_000 });
 
   const isolation = audit({ agent: options.agent, agentLog: join(runDir, "agent.log"), workspace, sandbox });
+  // Keep only request metadata. Agent transcripts and raw gateway logs stay ignored by git.
+  const requests = readFileSync(join(runDir, "gateway.log"), "utf8").split("\n").flatMap((line) => {
+    try {
+      const entry = JSON.parse(line);
+      return entry.event === "route" ? [entry] : [];
+    } catch {
+      return [];
+    }
+  });
+  writeFileSync(join(runDir, "gateway-requests.jsonl"), requests.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
   const record = { task: task.id, agent: options.agent, agentModel: options.model, userTools: options["user-tools"], mode, rep, ...result, ...verdict, isolation, workspace: options.keep ? workspace : undefined };
   runs.push(record);
   writeFileSync(join(outDir, "runs.jsonl"), runs.map((entry) => JSON.stringify(entry)).join("\n") + "\n");
