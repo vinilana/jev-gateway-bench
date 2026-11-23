@@ -17,6 +17,6 @@
     "test": "node --test test/opencode-runner.test.mjs"
   },
   "dependencies": {
-    "jev-gateway": "^0.4.3"
+    "jev-gateway": "^0.6.0"
   }
 }

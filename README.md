@@ -48,7 +48,10 @@ without routing.
 
 A separate series ran OpenCode 1.18.32 with `cli_proxy/claude-opus-5` against the same two tasks,
 five runs per mode. The LLM went through a local CLI Proxy API; Jev used OpenRouter
-(`typesafe/jev-1.13`). The gateway was `jev-gateway` 0.4.3. All 20 runs passed every hidden check
+(`typesafe/jev-1.13`). The published results above were produced with `jev-gateway` 0.4.3; new
+bench runs use 0.6.0 and should not be compared directly to those numbers without labelling the
+gateway version. Version 0.6.0 changes jev-codex's default `JEV_ON_NONE` to passthrough, but this
+bench client (`JEV_CLIENT=bench`) keeps `force_none`. All 20 runs passed every hidden check
 and the tool-call audit found no foreign reads. See the [raw runs and per-run checks](results/2026-09-23-opencode-opus-5-cliproxy-comparison/)
     and the [on/off summary](results/2026-09-23-opencode-opus-5-cliproxy-comparison/summary.md).
 
